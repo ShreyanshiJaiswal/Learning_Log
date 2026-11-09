@@ -574,3 +574,321 @@ ORDER BY runner_id;
 - Runner 3 has a 50% successful delivery rate.
 
 *Note: Order cancellations may be outside the runners' control, so these percentages should not be treated as a direct measure of runner performance.*
+
+## C. Ingredient Optimisation
+
+### 1. What are the standard ingredients for each pizza?
+
+```sql
+SELECT
+    pizza_names.pizza_name,
+    STRING_AGG(pizza_toppings.topping_name, ', ' ORDER BY pizza_toppings.topping_name) AS ingredients
+FROM pizza_runner.pizza_recipes
+CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(pizza_recipes.toppings, ', ')) AS topping_id
+JOIN pizza_runner.pizza_toppings
+    ON topping_id::INTEGER = pizza_toppings.topping_id
+JOIN pizza_runner.pizza_names
+    ON pizza_recipes.pizza_id = pizza_names.pizza_id
+GROUP BY pizza_names.pizza_name
+ORDER BY pizza_names.pizza_name;
+```
+
+**Output:**
+
+| pizza_name | ingredients |
+|---|---|
+| Meatlovers | Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| Vegetarian | Capsicum, Cheese, Mushrooms, Onions, Tomatoes, Tomato Sauce |
+
+**Answer:** Meatlovers and Vegetarian pizzas have different standard ingredients, as shown above.
+
+### 2. What was the most commonly added extra?
+
+```sql
+SELECT
+    pizza_toppings.topping_name,
+    COUNT(*) AS extra_count
+FROM customer_orders_temp
+CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(extras, ', ')) AS topping_id
+JOIN pizza_runner.pizza_toppings
+    ON topping_id::INTEGER = pizza_toppings.topping_id
+WHERE TRIM(extras) <> ''
+GROUP BY pizza_toppings.topping_name
+ORDER BY extra_count DESC;
+```
+
+**Output:**
+
+| topping_name | extra_count |
+|---|---:|
+| Bacon | 4 |
+| Chicken | 1 |
+| Cheese | 1 |
+| Mushroom | 1 |
+
+**Answer:** Bacon was the most commonly added extra, appearing 4 times.
+
+### 3. What was the most common exclusion?
+
+```sql
+SELECT
+    pizza_toppings.topping_name,
+    COUNT(*) AS exclusion_count
+FROM customer_orders_temp
+CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(exclusions, ', ')) AS topping_id
+JOIN pizza_runner.pizza_toppings
+    ON topping_id::INTEGER = pizza_toppings.topping_id
+WHERE TRIM(exclusions) <> ''
+GROUP BY pizza_toppings.topping_name
+ORDER BY exclusion_count DESC;
+```
+
+**Output:**
+
+| topping_name | exclusion_count |
+|---|---:|
+| Cheese | 4 |
+| BBQ Sauce | 1 |
+| Mushrooms | 1 |
+
+**Answer:** Cheese was the most commonly excluded topping, appearing 4 times.
+
+### 4. Generate an order item for each record in the customer_orders table.
+
+```sql
+WITH order_ingredients AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        pizza_names.pizza_name,
+        STRING_AGG(pizza_toppings.topping_name, ', ') AS exclusions
+    FROM customer_orders_temp
+    JOIN pizza_runner.pizza_names
+        ON customer_orders_temp.pizza_id = pizza_names.pizza_id
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(customer_orders_temp.exclusions, ', ')) AS topping_id
+    JOIN pizza_runner.pizza_toppings
+        ON topping_id::INTEGER = pizza_toppings.topping_id
+    WHERE TRIM(customer_orders_temp.exclusions) <> ''
+    GROUP BY customer_orders_temp.ctid, pizza_names.pizza_name
+),
+order_extras AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        STRING_AGG(pizza_toppings.topping_name, ', ') AS extras
+    FROM customer_orders_temp
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(customer_orders_temp.extras, ', ')) AS topping_id
+    JOIN pizza_runner.pizza_toppings
+        ON topping_id::INTEGER = pizza_toppings.topping_id
+    WHERE TRIM(customer_orders_temp.extras) <> ''
+    GROUP BY customer_orders_temp.ctid
+)
+SELECT
+    customer_orders_temp.order_id,
+    CASE
+        WHEN order_ingredients.exclusions IS NOT NULL
+         AND order_extras.extras IS NOT NULL
+            THEN pizza_names.pizza_name
+                 || ' - Exclude ' || order_ingredients.exclusions
+                 || ' - Extra ' || order_extras.extras
+        WHEN order_ingredients.exclusions IS NOT NULL
+            THEN pizza_names.pizza_name
+                 || ' - Exclude ' || order_ingredients.exclusions
+        WHEN order_extras.extras IS NOT NULL
+            THEN pizza_names.pizza_name
+                 || ' - Extra ' || order_extras.extras
+        ELSE pizza_names.pizza_name
+    END AS order_item
+FROM customer_orders_temp
+JOIN pizza_runner.pizza_names
+    ON customer_orders_temp.pizza_id = pizza_names.pizza_id
+LEFT JOIN order_ingredients
+    ON customer_orders_temp.ctid = order_ingredients.item_id
+LEFT JOIN order_extras
+    ON customer_orders_temp.ctid = order_extras.item_id
+ORDER BY customer_orders_temp.order_id;
+```
+
+**Output:**
+
+| order_id | order_item |
+|---:|---|
+| 1 | Meatlovers |
+| 2 | Meatlovers |
+| 3 | Meatlovers - Extra Cheese |
+| 3 | Vegetarian - Exclude Cheese |
+| 4 | Meatlovers - Exclude Cheese |
+| 4 | Meatlovers - Exclude Cheese |
+| 4 | Vegetarian - Exclude Cheese |
+| 5 | Meatlovers - Extra Bacon |
+| 6 | Vegetarian |
+| 7 | Meatlovers - Extra Bacon |
+| 8 | Meatlovers |
+| 9 | Meatlovers - Exclude BBQ Sauce - Extra Bacon |
+| 10 | Vegetarian - Exclude Cheese - Extra Bacon |
+
+**Answer:** Each pizza order is displayed with its pizza name and any requested exclusions or extras.
+
+### 5. Generate an alphabetically ordered comma-separated ingredient list for each pizza order. Prefix ingredients with 2x where they are repeated.
+
+```sql
+WITH base_ingredients AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        pizza_toppings.topping_name
+    FROM customer_orders_temp
+    JOIN pizza_runner.pizza_recipes
+        ON customer_orders_temp.pizza_id = pizza_recipes.pizza_id
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(pizza_recipes.toppings, ', ')) AS topping_id
+    JOIN pizza_runner.pizza_toppings
+        ON topping_id::INTEGER = pizza_toppings.topping_id
+),
+extra_ingredients AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        pizza_toppings.topping_name
+    FROM customer_orders_temp
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(customer_orders_temp.extras, ', ')) AS topping_id
+    JOIN pizza_runner.pizza_toppings
+        ON topping_id::INTEGER = pizza_toppings.topping_id
+    WHERE TRIM(customer_orders_temp.extras) <> ''
+),
+excluded_ingredients AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        pizza_toppings.topping_name
+    FROM customer_orders_temp
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(customer_orders_temp.exclusions, ', ')) AS topping_id
+    JOIN pizza_runner.pizza_toppings
+        ON topping_id::INTEGER = pizza_toppings.topping_id
+    WHERE TRIM(customer_orders_temp.exclusions) <> ''
+),
+all_ingredients AS (
+    SELECT item_id, topping_name FROM base_ingredients
+    UNION ALL
+    SELECT item_id, topping_name FROM extra_ingredients
+),
+final_ingredients AS (
+    SELECT
+        all_ingredients.item_id,
+        all_ingredients.topping_name,
+        COUNT(*) AS ingredient_count
+    FROM all_ingredients
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM excluded_ingredients
+        WHERE excluded_ingredients.item_id = all_ingredients.item_id
+          AND excluded_ingredients.topping_name = all_ingredients.topping_name
+    )
+    GROUP BY all_ingredients.item_id, all_ingredients.topping_name
+)
+SELECT
+    customer_orders_temp.order_id,
+    STRING_AGG(
+        CASE
+            WHEN final_ingredients.ingredient_count > 1
+                THEN final_ingredients.ingredient_count || 'x ' || final_ingredients.topping_name
+            ELSE final_ingredients.topping_name
+        END,
+        ', ' ORDER BY final_ingredients.topping_name
+    ) AS ingredient_list
+FROM customer_orders_temp
+JOIN final_ingredients
+    ON customer_orders_temp.ctid = final_ingredients.item_id
+GROUP BY customer_orders_temp.ctid, customer_orders_temp.order_id
+ORDER BY customer_orders_temp.order_id;
+```
+
+**Output:**
+
+| order_id | ingredient_list |
+|---:|---|
+| 1 | Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 2 | Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 3 | Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami, Cheese |
+| 3 | Capsicum, Mushrooms, Onions, Tomatoes, Tomato Sauce |
+| 4 | Bacon, BBQ Sauce, Beef, Chicken, Mushrooms, Pepperoni, Salami |
+| 4 | Bacon, BBQ Sauce, Beef, Chicken, Mushrooms, Pepperoni, Salami |
+| 4 | Capsicum, Mushrooms, Onions, Tomatoes, Tomato Sauce |
+| 5 | 2x Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 6 | Capsicum, Cheese, Mushrooms, Onions, Tomatoes, Tomato Sauce |
+| 7 | 2x Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 8 | Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 9 | 2x Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 10 | Bacon, Capsicum, Cheese, Mushrooms, Onions, Tomatoes, Tomato Sauce |
+
+**Answer:** The query combines standard ingredients with extras, removes excluded ingredients and displays the final ingredient list alphabetically. Repeated ingredients are prefixed with their quantity.
+
+### 6. What is the total quantity of each ingredient used in all delivered pizzas? 
+
+```sql
+WITH delivered_orders AS (
+    SELECT
+        customer_orders_temp.ctid AS item_id,
+        pizza_recipes.toppings,
+        customer_orders_temp.extras,
+        customer_orders_temp.exclusions
+    FROM customer_orders_temp
+    JOIN runner_orders_temp
+        ON customer_orders_temp.order_id = runner_orders_temp.order_id
+    JOIN pizza_runner.pizza_recipes
+        ON customer_orders_temp.pizza_id = pizza_recipes.pizza_id
+    WHERE runner_orders_temp.cancellation = ' '
+),
+base_toppings AS (
+    SELECT
+        delivered_orders.item_id,
+        UNNEST(STRING_TO_ARRAY(delivered_orders.toppings, ', '))::INTEGER AS topping_id
+    FROM delivered_orders
+),
+extra_toppings AS (
+    SELECT
+        delivered_orders.item_id,
+        UNNEST(STRING_TO_ARRAY(delivered_orders.extras, ', '))::INTEGER AS topping_id
+    FROM delivered_orders
+    WHERE TRIM(delivered_orders.extras) <> ''
+),
+excluded_toppings AS (
+    SELECT
+        delivered_orders.item_id,
+        UNNEST(STRING_TO_ARRAY(delivered_orders.exclusions, ', '))::INTEGER AS topping_id
+    FROM delivered_orders
+    WHERE TRIM(delivered_orders.exclusions) <> ''
+),
+all_toppings AS (
+    SELECT item_id, topping_id FROM base_toppings
+    UNION ALL
+    SELECT item_id, topping_id FROM extra_toppings
+)
+SELECT
+    pizza_toppings.topping_name,
+    COUNT(*) AS topping_quantity
+FROM all_toppings
+JOIN pizza_runner.pizza_toppings
+    ON all_toppings.topping_id = pizza_toppings.topping_id
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM excluded_toppings
+    WHERE excluded_toppings.item_id = all_toppings.item_id
+      AND excluded_toppings.topping_id = all_toppings.topping_id
+)
+GROUP BY pizza_toppings.topping_name
+ORDER BY topping_quantity DESC;
+```
+
+**Output:**
+
+| topping_name | topping_quantity |
+|---|---:|
+| Bacon | 12 |
+| BBQ Sauce | 11 |
+| Beef | 11 |
+| Cheese | 11 |
+| Chicken | 11 |
+| Mushrooms | 11 |
+| Pepperoni | 11 |
+| Salami | 11 |
+| Capsicum | 3 |
+| Onions | 3 |
+| Tomatoes | 3 |
+| Tomato Sauce | 3 |
+
+**Answer:** Bacon was the most frequently used ingredient across delivered pizzas.
