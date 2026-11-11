@@ -8,6 +8,8 @@
 - [Entity Relationship Diagram](#entity-relationship-diagram)
 - [Questions and Solutions](#questions-and-solutions)
 
+  Please note that all the information regarding this case study has been sourced from the following link: [8 Week SQL Challenge – Case Study 3](https://8weeksqlchallenge.com/case-study-3/).
+
 ## Business Task
 
 Danny and his friends launched a new startup Foodie-Fi and started selling monthly and annual subscriptions, giving their customers unlimited on-demand access to exclusive food videos from around the world.
