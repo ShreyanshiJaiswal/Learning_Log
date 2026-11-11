@@ -8,7 +8,7 @@
 - [Entity Relationship Diagram](#entity-relationship-diagram)
 - [Questions and Solutions](#questions-and-solutions)
 
-  Please note that all the information regarding this case study has been sourced from the following link: [8 Week SQL Challenge – Case Study 3](https://8weeksqlchallenge.com/case-study-3/).
+  Please note that all the information regarding this case study has been sourced from the following link:[here](https://8weeksqlchallenge.com/case-study-3/).
 
 ## Business Task
 
