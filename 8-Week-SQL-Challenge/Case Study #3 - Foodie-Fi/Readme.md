@@ -43,3 +43,32 @@ Customer subscriptions show the exact date when their specific `plan_id` starts.
 - When customers churn, they retain access until the end of their current billing period. However, the `start_date` records the date they decided to cancel.
 
 ## Questions and Solutions
+
+### A. Customer Journey
+
+**Question:** Based on the 8 sample customers provided in the `subscriptions` table, write a brief description about each customer's onboarding journey.
+
+```sql
+SELECT
+    subscriptions.customer_id,
+    plans.plan_id,
+    plans.plan_name,
+    subscriptions.start_date
+FROM foodie_fi.subscriptions
+JOIN foodie_fi.plans
+    ON subscriptions.plan_id = plans.plan_id
+WHERE subscriptions.customer_id IN (1, 2, 11, 13, 15, 16, 18, 19)
+ORDER BY subscriptions.customer_id, subscriptions.start_date;
+```
+
+**Output:**
+
+| customer_id | plan_id | plan_name | start_date |
+|---:|---:|---|---|
+|  |  |  |  |
+
+**Customer Journey:**
+
+- **Customer 1:** Started with a free trial on 1 August 2020 and subscribed to the Basic monthly plan on 8 August 2020.
+- **Customer 13:** Started with a free trial on 15 December 2020, subscribed to the Basic monthly plan on 22 December 2020, and upgraded to the Pro monthly plan on 29 March 2021.
+- **Customer 15:** Started with a free trial on 17 March 2020, upgraded to the Pro monthly plan on 24 March 2020, and decided to cancel on 29 April 2020.
